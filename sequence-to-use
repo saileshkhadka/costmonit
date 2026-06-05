@@ -1,0 +1,34 @@
+# 1. Clone / create your project folder
+mkdir costmonitor && cd costmonitor
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Start Postgres (Docker — easiest)
+docker run -d --name costdb \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=costmonitor \
+  -p 5432:5432 postgres:16
+
+# 4. Create tables
+psql postgresql://postgres:password@localhost:5432/costmonitor -f schema.sql
+
+# 5. Set up your .env
+cp .env.example .env
+# Edit .env with your values
+
+# 6. Deploy the IAM role into YOUR OWN AWS account
+aws cloudformation deploy \
+  --template-file iam-readonly-role.yaml \
+  --stack-name CostMonitor-Test \
+  --parameter-overrides \
+    PlatformAccountId=YOUR_ACCOUNT_ID \
+    ExternalId=$(python -c "import uuid; print(uuid.uuid4())") \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# 7. Run ingestion — pull your real AWS costs
+python ingestion.py
+
+# 8. Start the API
+uvicorn main:app --reload --port 8000
+# Open http://localhost:8000/docs — all endpoints are there

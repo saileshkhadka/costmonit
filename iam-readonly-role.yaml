@@ -1,0 +1,236 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CloudCostMonitor — Read-Only IAM Role
+  Deploy this once in your AWS account. It grants CloudCostMonitor
+  read-only access to billing data. Zero write permissions.
+
+# ──────────────────────────────────────────────
+# PARAMETERS  (your platform fills these in)
+# ──────────────────────────────────────────────
+Parameters:
+
+  PlatformAccountId:
+    Type: String
+    Description: The AWS Account ID of your CloudCostMonitor platform.
+    AllowedPattern: "^[0-9]{12}$"
+    ConstraintDescription: Must be a 12-digit AWS account ID.
+
+  ExternalId:
+    Type: String
+    Description: >
+      Unique secret token per customer. Prevents confused deputy attacks.
+      Generate with: python -c "import uuid; print(uuid.uuid4())"
+    MinLength: 16
+    MaxLength: 64
+
+  RoleName:
+    Type: String
+    Default: CloudCostMonitor-ReadOnly
+    Description: Name of the IAM role. Change only if your org has naming rules.
+
+# ──────────────────────────────────────────────
+# RESOURCES
+# ──────────────────────────────────────────────
+Resources:
+
+  CloudCostMonitorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Read-only billing and cost data access for CloudCostMonitor.
+      MaxSessionDuration: 3600
+
+      # Trust Policy — who can assume this role
+      # Only your platform account can assume it, and only with the correct ExternalId
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowPlatformToAssume
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${PlatformAccountId}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+
+      Policies:
+        - PolicyName: CostMonitorReadOnlyPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+
+              # 1. Cost Explorer — core billing data
+              - Sid: CostExplorer
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:GetCostAndUsageWithResources
+                  - ce:GetCostForecast
+                  - ce:GetDimensionValues
+                  - ce:GetReservationCoverage
+                  - ce:GetReservationUtilization
+                  - ce:GetReservationPurchaseRecommendation
+                  - ce:GetSavingsPlansUtilization
+                  - ce:GetSavingsPlansCoverage
+                  - ce:GetRightsizingRecommendation
+                  - ce:GetUsageForecast
+                  - ce:GetTags
+                  - ce:ListCostAllocationTags
+                  - ce:ListCostCategoryDefinitions
+                Resource: "*"
+
+              # 2. Budgets — read existing customer budgets
+              - Sid: Budgets
+                Effect: Allow
+                Action:
+                  - budgets:ViewBudget
+                  - budgets:DescribeBudgets
+                  - budgets:DescribeBudgetActionsForAccount
+                Resource: "*"
+
+              # 3. CloudWatch — resource utilisation metrics (for rightsizing)
+              - Sid: CloudWatch
+                Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:DescribeAlarms
+                Resource: "*"
+
+              # 4. Cost & Usage Reports — high-res billing exports
+              - Sid: CUR
+                Effect: Allow
+                Action:
+                  - cur:DescribeReportDefinitions
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: "*"
+
+              # 5. EC2 — instance inventory for waste detection
+              - Sid: EC2
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeNatGateways
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeReservedInstances
+                Resource: "*"
+
+              # 6. RDS — database inventory
+              - Sid: RDS
+                Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBSnapshots
+                  - rds:DescribeReservedDBInstances
+                  - rds:ListTagsForResource
+                Resource: "*"
+
+              # 7. Lambda — function inventory
+              - Sid: Lambda
+                Effect: Allow
+                Action:
+                  - lambda:ListFunctions
+                  - lambda:GetFunction
+                  - lambda:ListTags
+                Resource: "*"
+
+              # 8. ECS / EKS — container cost visibility
+              - Sid: Containers
+                Effect: Allow
+                Action:
+                  - ecs:ListClusters
+                  - ecs:DescribeClusters
+                  - ecs:ListServices
+                  - ecs:DescribeServices
+                  - eks:ListClusters
+                  - eks:DescribeCluster
+                Resource: "*"
+
+              # 9. S3 — storage inventory
+              - Sid: S3Inventory
+                Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketTagging
+                  - s3:GetBucketLocation
+                Resource: "*"
+
+              # 10. Organizations — multi-account discovery
+              - Sid: Organizations
+                Effect: Allow
+                Action:
+                  - organizations:DescribeOrganization
+                  - organizations:ListAccounts
+                  - organizations:DescribeAccount
+                Resource: "*"
+
+              # 11. IAM — account alias only
+              - Sid: IAM
+                Effect: Allow
+                Action:
+                  - iam:ListAccountAliases
+                Resource: "*"
+
+              # 12. Pricing API — theoretical cost calculations
+              - Sid: Pricing
+                Effect: Allow
+                Action:
+                  - pricing:GetProducts
+                  - pricing:DescribeServices
+                Resource: "*"
+
+              # SAFETY NET — explicit deny on ALL write operations
+              # Even if another policy accidentally grants write access,
+              # this Deny overrides everything.
+              - Sid: DenyAllWrites
+                Effect: Deny
+                Action:
+                  - "*:Create*"
+                  - "*:Delete*"
+                  - "*:Modify*"
+                  - "*:Update*"
+                  - "*:Put*"
+                  - "*:Set*"
+                  - "*:Attach*"
+                  - "*:Detach*"
+                  - "*:Run*"
+                  - "*:Start*"
+                  - "*:Stop*"
+                  - "*:Terminate*"
+                  - "*:Reboot*"
+                Resource: "*"
+
+      Tags:
+        - Key: ManagedBy
+          Value: CloudCostMonitor
+        - Key: Purpose
+          Value: BillingReadOnly
+
+# ──────────────────────────────────────────────
+# OUTPUTS  (customer copies RoleArn back to the platform)
+# ──────────────────────────────────────────────
+Outputs:
+
+  RoleArn:
+    Description: >
+      Copy this ARN and paste it into your CloudCostMonitor dashboard
+      to complete the connection.
+    Value: !GetAtt CloudCostMonitorRole.Arn
+
+  AccountId:
+    Description: The AWS account where this role was created.
+    Value: !Ref AWS::AccountId
+
+  Message:
+    Value: !Sub >
+      Setup complete. Role created in account ${AWS::AccountId}.
+      Copy the RoleArn above into your dashboard.
