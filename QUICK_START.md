@@ -79,6 +79,15 @@ agent = OptimizerAgent(tenant_id="my-company")
 result = agent.run(cost_data={...}, resource_data={...}, idle_resources=[...])
 ```
 
+### External monitoring CLI
+```bash
+export TENANT_ID=<your-tenant-id>
+export DB_URL="postgresql://postgres:password@localhost:5432/costmonitor"
+python monitor.py --days 30 --aws-account-id <aws-account-id>
+```
+
+Add `--save-recs` to persist AI optimization recommendations.
+
 ### Anomaly Detector
 ```python
 from agent import AnomalyAgent

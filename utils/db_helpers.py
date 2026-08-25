@@ -156,36 +156,42 @@ class AgentDatabase:
             log.error(f"Failed to save forecast: {e}")
             raise
 
-    def get_cost_data(self, tenant_id: str, aws_account_id: str, days: int = 30) -> dict:
+    def get_cost_data(self, tenant_id: str, aws_account_id: Optional[str], days: int = 30) -> dict:
         """Fetch recent cost data for analysis."""
         try:
+            account_filter = ""
+            params = [tenant_id, f"{days} days"]
+            if aws_account_id:
+                account_filter = "AND aws_account_id = %s"
+                params.insert(1, aws_account_id)
+
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
                     # Get cost by service
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT service, service_group, SUM(cost_usd) as total
                         FROM cost_records
-                        WHERE tenant_id = %s AND aws_account_id = %s
+                        WHERE tenant_id = %s {account_filter}
+                        AND granularity = 'DAILY'
                         AND date >= CURRENT_DATE - %s::interval
                         GROUP BY service, service_group
                         ORDER BY total DESC
                         LIMIT 20
-                    """, (tenant_id, aws_account_id, f"{days} days"))
-                    
+                    """, params)
                     services = cur.fetchall()
-                    
+
                     # Get daily totals
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT date, SUM(cost_usd) as total
                         FROM cost_records
-                        WHERE tenant_id = %s AND aws_account_id = %s
+                        WHERE tenant_id = %s {account_filter}
+                        AND granularity = 'DAILY'
                         AND date >= CURRENT_DATE - %s::interval
                         GROUP BY date
                         ORDER BY date DESC
-                    """, (tenant_id, aws_account_id, f"{days} days"))
-                    
+                    """, params)
                     daily = cur.fetchall()
-                    
+
                     return {
                         "by_service": [dict(s) for s in services],
                         "daily": [dict(d) for d in daily],
@@ -195,23 +201,86 @@ class AgentDatabase:
             log.error(f"Failed to get cost data: {e}")
             return {"error": str(e)}
 
-    def get_idle_resources(self, tenant_id: str, aws_account_id: str) -> list:
+    def get_idle_resources(self, tenant_id: str, aws_account_id: Optional[str]) -> list:
         """Fetch idle resources for analysis."""
         try:
+            account_filter = ""
+            params = [tenant_id]
+            if aws_account_id:
+                account_filter = "AND aws_account_id = %s"
+                params.append(aws_account_id)
+
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(f"""
                         SELECT resource_id, resource_type, name, monthly_cost_usd,
                                cpu_avg_pct, memory_avg_pct, state
                         FROM resource_inventory
-                        WHERE tenant_id = %s AND aws_account_id = %s
+                        WHERE tenant_id = %s {account_filter}
                         AND is_idle = true
                         ORDER BY monthly_cost_usd DESC
                         LIMIT 20
-                    """, (tenant_id, aws_account_id))
-                    
+                    """, params)
                     idle = cur.fetchall()
                     return [dict(r) for r in idle]
         except Exception as e:
             log.error(f"Failed to get idle resources: {e}")
             return []
+
+    def get_resource_inventory_summary(self, tenant_id: str, aws_account_id: Optional[str]) -> dict:
+        """Fetch a summary of resource inventory for analysis."""
+        try:
+            account_filter = ""
+            params = [tenant_id]
+            if aws_account_id:
+                account_filter = "AND aws_account_id = %s"
+                params.append(aws_account_id)
+
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT COUNT(*) AS total_resources,
+                               SUM(COALESCE(monthly_cost_usd, 0)) AS total_monthly_cost,
+                               COUNT(*) FILTER (WHERE is_idle) AS idle_resources
+                        FROM resource_inventory
+                        WHERE tenant_id = %s {account_filter}
+                    """, params)
+                    summary = cur.fetchone() or {}
+
+                    cur.execute(f"""
+                        SELECT resource_type, COUNT(*) AS count,
+                               SUM(COALESCE(monthly_cost_usd, 0)) AS monthly_cost_usd
+                        FROM resource_inventory
+                        WHERE tenant_id = %s {account_filter}
+                        GROUP BY resource_type
+                        ORDER BY monthly_cost_usd DESC
+                        LIMIT 20
+                    """, params)
+                    by_type = cur.fetchall()
+
+                    cur.execute(f"""
+                        SELECT service_group, COUNT(*) AS count,
+                               SUM(COALESCE(monthly_cost_usd, 0)) AS monthly_cost_usd
+                        FROM resource_inventory
+                        WHERE tenant_id = %s {account_filter}
+                        GROUP BY service_group
+                        ORDER BY monthly_cost_usd DESC
+                    """, params)
+                    by_service_group = cur.fetchall()
+
+                    return {
+                        "total_resources": int(summary.get("total_resources") or 0),
+                        "total_monthly_cost_usd": float(summary.get("total_monthly_cost") or 0.0),
+                        "idle_resources": int(summary.get("idle_resources") or 0),
+                        "resources_by_type": [dict(r) for r in by_type],
+                        "resources_by_service_group": [dict(r) for r in by_service_group],
+                    }
+        except Exception as e:
+            log.error(f"Failed to get resource inventory summary: {e}")
+            return {
+                "total_resources": 0,
+                "total_monthly_cost_usd": 0.0,
+                "idle_resources": 0,
+                "resources_by_type": [],
+                "resources_by_service_group": [],
+            }

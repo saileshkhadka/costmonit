@@ -65,6 +65,15 @@ uvicorn main:app --reload --port 8000
 http://localhost:8000/docs
 ```
 
+7. Run the external AWS cost monitoring CLI:
+
+```bash
+export TENANT_ID=<your-tenant-id>
+python monitor.py --days 30 --aws-account-id <aws-account-id>
+```
+
+You can also save AI recommendations to the database with `--save-recs`.
+
 ## Notes
 
 - `iam-readonly-role.yaml` is deployed in the customer’s AWS account once.

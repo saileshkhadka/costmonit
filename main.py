@@ -40,6 +40,7 @@ from agent import (
     NLQAgent, ReporterAgent, AnalyzerAgent,
 )
 from utils.db_helpers import AgentDatabase
+from utils.monitoring import run_monitoring_insights
 from analysis import run_agent
 
 app = FastAPI(
@@ -78,6 +79,30 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+
+def create_token(user_id: str, tenant_id: str) -> str:
+    payload = {
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    """Decode JWT and return {user_id, tenant_id}. Raises 401 on any failure."""
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        tenant_id = payload.get("tenant_id")
+        if not user_id or not tenant_id:
+            raise JWTError("Required claims are missing")
+        return {"user_id": user_id, "tenant_id": tenant_id}
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 @app.post("/v1/agents/{agent_type}/run")
@@ -120,28 +145,26 @@ def run_agent_endpoint(
     }
 
 
-# ─────────────────────────────────────────────
-# Auth helpers
-# ─────────────────────────────────────────────
-
-def create_token(user_id: str, tenant_id: str) -> str:
-    payload = {
-        "sub": user_id,
-        "tenant_id": tenant_id,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+@app.get("/v1/monitoring/insights")
+def monitoring_insights(
+    aws_account_id: Optional[str] = None,
+    days: int = 30,
+    save_recommendations: bool = False,
+    auth=Depends(get_current_user),
 ):
-    """Decode JWT and return {user_id, tenant_id}. Raises 401 on any failure."""
-    try:
-        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return {"user_id": payload["sub"], "tenant_id": payload["tenant_id"]}
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    """Return overall AWS cost monitoring insights and AI recommendations."""
+    result = run_monitoring_insights(
+        tenant_id=auth["tenant_id"],
+        db_url=DB_URL,
+        aws_account_id=aws_account_id,
+        days=days,
+        save_recommendations=save_recommendations,
+    )
+
+    if not result["success"]:
+        raise HTTPException(404, detail=result["message"])
+
+    return result
 
 
 # ─────────────────────────────────────────────
