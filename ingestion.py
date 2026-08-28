@@ -485,17 +485,22 @@ def check_budget_alerts(records: list[CostRecord], budgets: list[dict]) -> list[
     """
     month_start = datetime.now(timezone.utc).strftime("%Y-%m-01")
 
-    # Sum current month spend per (account, service_group)
+    # Sum current month spend per account, service group, and region.
     spend: dict = {}
     for r in records:
         if r.date >= month_start and r.granularity == "DAILY":
-            key = (r.aws_account_id, r.service_group)
+            key = (r.aws_account_id, r.service_group, r.region)
             spend[key] = spend.get(key, 0.0) + r.cost_usd
 
     triggered = []
     for b in budgets:
-        key = (b["aws_account_id"], b.get("service_group") or "all")
-        current = spend.get(key, 0.0)
+        current = sum(
+            amount
+            for (account_id, service_group, region), amount in spend.items()
+            if (b.get("aws_account_id") is None or account_id == b["aws_account_id"])
+            and (b.get("service_group") is None or service_group == b["service_group"])
+            and (b.get("region") is None or region == b["region"])
+        )
         limit = float(b["limit_usd"])
         threshold = b.get("alert_at_pct", 80)
         pct = (current / limit * 100) if limit > 0 else 0
@@ -567,6 +572,14 @@ def run_ingestion(connection: AccountConnection, db_url: str) -> dict:
         # 5. Store
         all_records = daily + monthly
         result["total_upserted"] = upsert_records(all_records, db_url)
+
+        # 6. Evaluate and persist budget alerts after the cost upsert.
+        from utils.db_helpers import AgentDatabase
+        db = AgentDatabase(db_url)
+        budgets = db.get_active_budgets(connection.tenant_id, connection.aws_account_id)
+        alerts = check_budget_alerts(daily, budgets)
+        result["alerts"] = len(alerts)
+        db.save_alert_events(connection.tenant_id, alerts)
 
         result["status"] = "success"
         result["completed_at"] = datetime.now(timezone.utc).isoformat()

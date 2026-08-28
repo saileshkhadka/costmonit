@@ -151,20 +151,54 @@ Resources:
                   - ecs:DescribeClusters
                   - ecs:ListServices
                   - ecs:DescribeServices
+                  - ecs:ListTasks
+                  - ecs:DescribeTasks
+                  - ecs:ListTaskDefinitions
+                  - ecs:DescribeTaskDefinition
                   - eks:ListClusters
                   - eks:DescribeCluster
+                  - eks:ListNodegroups
+                  - eks:DescribeNodegroup
                 Resource: "*"
 
-              # 9. S3 — storage inventory
+              # 9. Additional compute and database inventory
+              - Sid: AdditionalInventory
+                Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:DescribeAutoScalingInstances
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeTable
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:ListTagsOfResource
+                Resource: "*"
+
+              # 10. S3 — storage inventory
               - Sid: S3Inventory
                 Effect: Allow
                 Action:
                   - s3:ListAllMyBuckets
                   - s3:GetBucketTagging
                   - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketLifecycleConfiguration
+                  - s3:GetBucketEncryption
                 Resource: "*"
 
-              # 10. Organizations — multi-account discovery
+              # 11. Resource tags — team and environment attribution
+              - Sid: ResourceTags
+                Effect: Allow
+                Action:
+                  - tag:GetResources
+                  - tag:GetTagKeys
+                  - tag:GetTagValues
+                Resource: "*"
+
+              # 12. Organizations — multi-account discovery
               - Sid: Organizations
                 Effect: Allow
                 Action:
@@ -173,14 +207,14 @@ Resources:
                   - organizations:DescribeAccount
                 Resource: "*"
 
-              # 11. IAM — account alias only
+              # 13. IAM — account alias only
               - Sid: IAM
                 Effect: Allow
                 Action:
                   - iam:ListAccountAliases
                 Resource: "*"
 
-              # 12. Pricing API — theoretical cost calculations
+              # 14. Pricing API — theoretical cost calculations
               - Sid: Pricing
                 Effect: Allow
                 Action:

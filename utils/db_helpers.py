@@ -125,6 +125,66 @@ class AgentDatabase:
         
         return saved_count
 
+    def get_active_budgets(self, tenant_id: str, aws_account_id: Optional[str] = None) -> list:
+        """Fetch active budgets that apply to a tenant and optional account."""
+        account_filter = "AND (aws_account_id = %s OR aws_account_id IS NULL)" if aws_account_id else ""
+        params = [tenant_id]
+        if aws_account_id:
+            params.append(aws_account_id)
+
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""SELECT id, name, aws_account_id, service_group, region,
+                                   limit_usd, period, alert_at_pct
+                            FROM budgets
+                            WHERE tenant_id = %s AND is_active = true {account_filter}""",
+                        params,
+                    )
+                    return [dict(budget) for budget in cur.fetchall()]
+        except Exception as e:
+            log.error(f"Failed to get active budgets: {e}")
+            return []
+
+    def save_alert_events(self, tenant_id: str, alerts: list) -> int:
+        """Persist newly triggered budget alerts without duplicating active alerts."""
+        saved_count = 0
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    for alert in alerts:
+                        cur.execute(
+                            """INSERT INTO alert_events
+                                       (tenant_id, budget_id, aws_account_id, alert_type,
+                                        severity, title, message, current_value,
+                                        threshold_value, percent_used, state)
+                                SELECT %s, %s, %s, 'budget_threshold', %s, %s, %s, %s, %s, %s, 'firing'
+                                WHERE NOT EXISTS (
+                                    SELECT 1 FROM alert_events
+                                    WHERE tenant_id = %s AND budget_id = %s AND state = 'firing'
+                                )""",
+                            (
+                                tenant_id,
+                                alert["budget_id"],
+                                alert.get("aws_account_id"),
+                                alert["severity"],
+                                f"Budget threshold: {alert['budget_name']}",
+                                alert["message"],
+                                alert["current_usd"],
+                                alert["limit_usd"],
+                                alert["percent_used"],
+                                tenant_id,
+                                alert["budget_id"],
+                            ),
+                        )
+                        saved_count += cur.rowcount
+                conn.commit()
+        except Exception as e:
+            log.error(f"Failed to save alert events: {e}")
+            raise
+        return saved_count
+
     def save_forecast(self, tenant_id: str, aws_account_id: str, forecast: dict) -> str:
         """Save a spending forecast to the database."""
         forecast_id = str(uuid.uuid4())
@@ -180,6 +240,29 @@ class AgentDatabase:
                     """, params)
                     services = cur.fetchall()
 
+                    # Get the complete total independently of the top-service limit.
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(cost_usd), 0) AS total
+                        FROM cost_records
+                        WHERE tenant_id = %s {account_filter}
+                        AND granularity = 'DAILY'
+                        AND date >= CURRENT_DATE - %s::interval
+                    """, params)
+                    total = cur.fetchone() or {}
+
+                    # Get regional totals for the monitoring overview.
+                    cur.execute(f"""
+                        SELECT region, SUM(cost_usd) AS total
+                        FROM cost_records
+                        WHERE tenant_id = %s {account_filter}
+                        AND granularity = 'DAILY'
+                        AND date >= CURRENT_DATE - %s::interval
+                        GROUP BY region
+                        ORDER BY total DESC
+                        LIMIT 20
+                    """, params)
+                    regions = cur.fetchall()
+
                     # Get daily totals
                     cur.execute(f"""
                         SELECT date, SUM(cost_usd) as total
@@ -194,7 +277,9 @@ class AgentDatabase:
 
                     return {
                         "by_service": [dict(s) for s in services],
+                        "by_region": [dict(r) for r in regions],
                         "daily": [dict(d) for d in daily],
+                        "total": float(total.get("total") or 0.0),
                         "period_days": days
                     }
         except Exception as e:

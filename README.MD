@@ -10,8 +10,13 @@ A lightweight AWS cost monitoring and AI analysis platform.
   - pulls Cost Explorer billing data
   - normalizes service names
   - upserts cost rows into Postgres
+- `monitor.py` — command-line monitoring workflow for cost summaries, regional
+  breakdowns, idle resources, and AI optimization recommendations.
 - `schema.sql` — database schema for tenants, users, AWS connections, cost records, budgets, alerts, and AI analytics.
-- `main.py` — FastAPI backend with JWT auth, account management, cost summaries, budgets and alerts, manual sync, and AI agent execution.
+- `main.py` — FastAPI backend with JWT auth, account management, cost summaries,
+  budgets and alerts, manual sync, and AI agent execution.
+- `agent/` — AI agents for optimization, anomaly detection, forecasting,
+  natural-language queries, reporting, and root-cause analysis.
 - `requirements.txt` — Python dependencies.
 - `env.example` — environment variable template.
 
@@ -37,26 +42,27 @@ Then edit `.env` and set:
 - `DB_URL`
 - `JWT_SECRET`
 - `CLAUDE_API_KEY` or `OPENAI_API_KEY`
-- `PLATFORM_AWS_ACCOUNT_ID`
-- `TEST_ROLE_ARN`
-- `TEST_EXTERNAL_ID`
+- `PLATFORM_AWS_ACCOUNT_ID` for the platform account
+- `TEST_TENANT_ID`, `TEST_ACCOUNT_ID`, `TEST_ROLE_ARN`, and `TEST_EXTERNAL_ID`
+  when running `ingestion.py` directly
+- `TENANT_ID` when using the monitoring CLI
 
 3. Initialize the database:
 
 ```bash
-psql -d costmonitor -f schema.sql
+psql "$DB_URL" -f schema.sql
 ```
 
 4. Run ingestion:
 
 ```bash
-python ingestion.py
+.venv/bin/python ingestion.py
 ```
 
 5. Start the API:
 
 ```bash
-uvicorn main:app --reload --port 8000
+.venv/bin/uvicorn main:app --reload --port 8000
 ```
 
 6. Open the API docs:
@@ -69,16 +75,32 @@ http://localhost:8000/docs
 
 ```bash
 export TENANT_ID=<your-tenant-id>
-python monitor.py --days 30 --aws-account-id <aws-account-id>
+.venv/bin/python monitor.py --days 30 --aws-account-id <aws-account-id>
 ```
 
 You can also save AI recommendations to the database with `--save-recs`.
 
-## Notes
+## AWS connection
 
-- `iam-readonly-role.yaml` is deployed in the customer’s AWS account once.
-- The role grants read-only access to billing, cost, CloudWatch, EC2, RDS, Lambda, and other inventory APIs.
-- `ingestion.py` runs hourly by design, but can be triggered manually via the API.
+- Deploy `iam-readonly-role.yaml` in each customer AWS account and provide the
+  resulting role ARN and external ID to the application.
+- The role grants read-only access to Cost Explorer, CloudWatch, billing
+  metadata, and common resource APIs including EC2, RDS, Lambda, ECS, EKS,
+  Auto Scaling, ELB, DynamoDB, S3, and resource tags.
+- Cost ingestion can be run from the CLI or triggered manually through the API.
+- Cost Explorer monitoring works broadly by AWS service and region. Resource-
+  level inventory collection is planned but is not yet implemented in
+  `ingestion.py`.
+
+## Monitoring and alerts
+
+The monitoring workflow reports complete cost totals, top services, regional
+totals, resource summaries, and AI optimization recommendations. Budget alerts
+are evaluated after ingestion and saved to `alert_events` with duplicate active
+alerts suppressed. The API exposes budget management and alert listing routes.
+
+AI requests support Claude and OpenAI. Invalid AI JSON responses are reported as
+failed runs instead of successful runs with unusable data.
 
 ## AI agent support
 
@@ -103,6 +125,17 @@ Example agent types:
 - `nlq`
 - `reporter`
 - `analyzer`
+
+The repository currently has no automated test suite. Compilation and focused
+smoke checks should be run with the project virtual environment before deploy.
+
+## Remaining work
+
+- Add scheduled ingestion and scheduled AI jobs.
+- Implement AWS resource inventory and CloudWatch utilization collection.
+- Add Slack/email notification delivery for persisted alerts.
+- Add frontend dashboard and deeper FinOps analysis such as tagging coverage,
+  rightsizing, Savings Plans, reserved instances, and multi-account rollups.
 
 ## Useful files
 

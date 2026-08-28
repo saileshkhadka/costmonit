@@ -18,16 +18,16 @@ import json
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -64,6 +64,9 @@ DB_URL = os.getenv("DB_URL", "postgresql://postgres:password@localhost:5432/cost
 JWT_SECRET = os.getenv("JWT_SECRET", "change-this-in-production")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
+
+if os.getenv("ENVIRONMENT", "development").lower() == "production" and JWT_SECRET == "change-this-in-production":
+    raise RuntimeError("JWT_SECRET must be configured in production")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
@@ -148,7 +151,7 @@ def run_agent_endpoint(
 @app.get("/v1/monitoring/insights")
 def monitoring_insights(
     aws_account_id: Optional[str] = None,
-    days: int = 30,
+    days: int = Query(30, ge=1, le=366),
     save_recommendations: bool = False,
     auth=Depends(get_current_user),
 ):
@@ -192,9 +195,9 @@ class CreateBudgetRequest(BaseModel):
     aws_account_id: Optional[str] = None
     service_group: Optional[str] = None
     region: Optional[str] = None
-    limit_usd: float
-    period: str = "monthly"
-    alert_at_pct: int = 80
+    limit_usd: float = Field(gt=0)
+    period: Literal["daily", "weekly", "monthly"] = "monthly"
+    alert_at_pct: int = Field(80, ge=1, le=100)
 
 
 # ─────────────────────────────────────────────

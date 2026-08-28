@@ -134,7 +134,14 @@ class BaseAgent(ABC):
             parsed_data = self.parse_response(response_text)
         except Exception as e:
             log.error(f"[{self.agent_type}] Failed to parse response: {e}")
-            parsed_data = {"raw_response": response_text}
+            return AgentResult(
+                success=False,
+                data={"raw_response": response_text},
+                tokens_used=tokens_used,
+                cost_usd=cost_usd,
+                error=f"Failed to parse AI response: {e}",
+                model=self.model,
+            )
 
         return AgentResult(
             success=True,
@@ -150,8 +157,10 @@ class BaseAgent(ABC):
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            system=self.get_system_prompt(),
-            messages=[{"role": "user", "content": user_message}],
+            messages=[
+                {"role": "system", "content": self.get_system_prompt()},
+                {"role": "user", "content": user_message},
+            ],
         )
 
         response_text = response.choices[0].message.content
@@ -177,7 +186,14 @@ class BaseAgent(ABC):
             parsed_data = self.parse_response(response_text)
         except Exception as e:
             log.error(f"[{self.agent_type}] Failed to parse response: {e}")
-            parsed_data = {"raw_response": response_text}
+            return AgentResult(
+                success=False,
+                data={"raw_response": response_text},
+                tokens_used=tokens_used,
+                cost_usd=cost_usd,
+                error=f"Failed to parse AI response: {e}",
+                model=self.model,
+            )
 
         return AgentResult(
             success=True,

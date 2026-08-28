@@ -22,7 +22,9 @@ def format_money(value: float) -> float:
 
 
 def build_overview(cost_data: dict, resource_data: dict, idle_resources: list) -> dict:
-    total_spend = sum(format_money(item.get("total")) for item in cost_data.get("by_service", []))
+    total_spend = cost_data.get("total")
+    if total_spend is None:
+        total_spend = sum(format_money(item.get("total")) for item in cost_data.get("by_service", []))
     top_services = [
         {
             "service": item.get("service"),
@@ -37,11 +39,12 @@ def build_overview(cost_data: dict, resource_data: dict, idle_resources: list) -
             "region": item.get("region"),
             "total_usd": format_money(item.get("total")),
         }
-        for item in sorted(cost_data.get("daily", []), key=lambda x: format_money(x.get("total")), reverse=True)[:10]
+        for item in sorted(cost_data.get("by_region", []), key=lambda x: format_money(x.get("total")), reverse=True)[:10]
     ]
 
     return {
-        "total_30d_usd": format_money(total_spend),
+        "total_usd": format_money(total_spend),
+        "period_days": cost_data.get("period_days", 30),
         "service_count": len(cost_data.get("by_service", [])),
         "idle_resources": len(idle_resources),
         "total_resource_types": len(resource_data.get("resources_by_type", [])),
@@ -59,6 +62,9 @@ def run_monitoring_insights(
     save_recommendations: bool = False,
 ) -> dict:
     """Run the monitoring workflow and return AI-backed insights."""
+    if days < 1 or days > 366:
+        raise ValueError("days must be between 1 and 366")
+
     db = AgentDatabase(db_url)
 
     cost_data = db.get_cost_data(tenant_id, aws_account_id, days)
@@ -67,7 +73,16 @@ def run_monitoring_insights(
 
     overview = build_overview(cost_data, resource_data, idle_resources)
 
-    if overview["total_30d_usd"] <= 0 and not resource_data.get("resources_by_type"):
+    if cost_data.get("error"):
+        return {
+            "success": False,
+            "message": "Unable to load AWS cost data.",
+            "error": cost_data["error"],
+            "overview": overview,
+            "recommendations": [],
+        }
+
+    if overview["total_usd"] <= 0 and not resource_data.get("resources_by_type"):
         return {
             "success": False,
             "message": "No AWS cost or resource data available for the requested tenant/account.",
@@ -95,6 +110,7 @@ def run_monitoring_insights(
 
     return {
         "success": agent_result.success,
+        "message": agent_result.error if not agent_result.success else "Monitoring insights generated.",
         "overview": overview,
         "recommendations": recommendations,
         "ai_metadata": {
